@@ -30,6 +30,110 @@ class Encoder {
         ]);
     }
 
+    /* Temp function for ledger */
+    static outputScriptAsBuffer(output) {
+    
+        //Initialize buffer and offset
+        let offset = 0;
+        var buffer = Buffer.allocUnsafe(1000000);
+    
+        //Output script
+        if (output.script_type) {
+            switch (output.script_type) {
+                case 'p2sh':
+                    offset = writeScriptPayToScriptHash(output.address, buffer, offset);
+                    break;
+                case 'pubkeyhash':
+                    offset = writeScriptPayToPubKeyHash(output.address, buffer, offset);
+                    break;
+                case 'op_return':
+                    offset = writeScriptOpReturn(buffer, offset);
+                    break;
+                case 'lock':
+                    let locktime_le_string = parseInt(output.locktime).toString(16).replace(/^(.(..)*)$/, "0$1").match(/../g).reverse().join("");
+                    offset = writeScriptLockedPayToPubKeyHash(output.address, locktime_le_string, buffer, offset);
+                    break;
+                case 'attenuation':
+                    let model = Script.deserializeAttenuationModel(output.attenuation.model);
+                    if (output.attenuation.height_delta > 0)
+                        model = Script.adjustAttenuationModel(model, output.attenuation.height_delta);
+                    offset = writeAttenuationScript(Script.serializeAttenuationModel(model), output.attenuation.from_tx, output.attenuation.from_index, output.address, buffer, offset);
+                    break;
+                default:
+                    throw 'Unknown script type: ' + output.script_type;
+            }
+        } else if (output.script) {
+            let script = Script.fromASM(output.script).buffer;
+            offset += bufferutils.writeVarInt(buffer, script.length, offset);
+            offset += script.copy(buffer, offset);
+        } else {
+            throw 'Neither script not script type present';
+        }
+    
+        return buffer.slice(0, offset);
+    
+    }
+    
+    /* Temp function for ledger */
+    static attachmentAsBuffer(output) {
+    
+        //Initialize buffer and offset
+        let offset = 0;
+        var buffer = Buffer.allocUnsafe(1000000);
+    
+        // attachment
+        offset = buffer.writeUInt32LE(output.attachment.version, offset);
+        offset = buffer.writeUInt32LE(output.attachment.type, offset);
+    
+        if (output.attachment.version === Constants.ATTACHMENT.VERSION.DID) {
+            offset += encodeString(buffer, output.attachment.to_did, offset);
+            offset += encodeString(buffer, output.attachment.from_did, offset);
+        }
+    
+        switch (output.attachment.type) {
+            case Constants.ATTACHMENT.TYPE.ETP_TRANSFER:
+                break;
+            case Constants.ATTACHMENT.TYPE.MST:
+                switch (output.attachment.status) {
+                    case Constants.MST.STATUS.REGISTER:
+                        offset = encodeAttachmentAssetIssue(buffer, offset, output.attachment);
+                        break;
+                    case Constants.MST.STATUS.TRANSFER:
+                        offset = encodeAttachmentMSTTransfer(buffer, offset, output.attachment.symbol, output.attachment.quantity);
+                        break;
+                    default:
+                        throw Error("Asset status unknown");
+                }
+                break;
+            case Constants.ATTACHMENT.TYPE.MESSAGE:
+                offset = encodeAttachmentMessage(buffer, offset, output.attachment.message);
+                break;
+            case Constants.ATTACHMENT.TYPE.AVATAR:
+                offset = encodeAttachmentDid(buffer, offset, output.attachment);
+                break;
+            case Constants.ATTACHMENT.TYPE.CERT:
+                offset = encodeAttachmentCert(buffer, offset, output.attachment);
+                break;
+            case Constants.ATTACHMENT.TYPE.MIT:
+                switch (output.attachment.status) {
+                    case Constants.MIT.STATUS.REGISTER:
+                        offset = encodeAttachmentMITRegister(buffer, offset, output.attachment.symbol, output.attachment.content, output.attachment.address);
+                        break;
+                    case Constants.MIT.STATUS.TRANSFER:
+                        offset = encodeAttachmentMITTransfer(buffer, offset, output.attachment.symbol, output.attachment.address);
+                        break;
+                    default:
+                        throw Error("Asset status unknown");
+                }
+                break;
+            default:
+                throw Error("What kind of an output is that?!");
+        }
+    
+        return buffer.slice(0, offset);
+    
+    }
+
 }
 
 /**
@@ -355,8 +459,6 @@ function encodeAttachmentMITTransfer(buffer, offset, symbol, address) {
     offset += encodeString(buffer, address, offset);
     return offset;
 };
-
-
 
 /**
  * Enodes the given input script.
